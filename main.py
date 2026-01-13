@@ -13,12 +13,13 @@ TOKEN = "8454685844:AAHEtNzJuOv3fL1K_50QG9tUNntYT55MnFU"
 SAHIP_ID = 8258235296 
 bot = telebot.TeleBot(TOKEN)
 running_bots = {}
-BOT_LIMIT = 5 # 🛑 Maksimum alt bot sınırı
+BOT_LIMIT = 5 
 
 # --- RENDER HEALTH CHECK ---
 class RenderServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header('Content-type', 'text/html')
         self.end_headers()
         self.wfile.write(b"Nabi Master OS Aktif")
 
@@ -33,9 +34,10 @@ def get_uptime(start_time):
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}s {minutes}dk {seconds}sn"
 
-# --- ADMİN KOMUTLARI & PANEL ---
+# --- ADMİN PANELİ ---
 @bot.message_handler(commands=['start', 'panel'])
 def show_panel(message):
+    # Hata buradaydı sevgilim, return artık fonksiyon içinde
     if message.from_user.id != SAHIP_ID:
         bot.reply_to(message, "❌ Bu panel sadece sahibime özeldir.")
         return
@@ -46,11 +48,10 @@ def show_panel(message):
     admin_msg = (
         "👑 **NABI MASTER ADMİN PANELİ**\n\n"
         "📜 **Kullanılabilir Komutlar:**\n"
-        "🔹 `/start` - Paneli ve komutları yeniler.\n"
-        "🔹 `/durdur [dosya_adi]` - Belirli bir botu kapatır.\n"
-        "🔹 `/temizle` - Tüm kayıtlı dosyaları sunucudan siler.\n\n"
-        "💡 **Bilgi:** Yeni bir bot çalıştırmak için `.py` dosyasını direkt buraya gönder sevgilim.\n"
-        f"⚠️ **Limit:** En fazla `{BOT_LIMIT}` alt bot çalışabilir."
+        "🔹 `/start` - Paneli yeniler.\n"
+        "🔹 `/durdur [dosya_adi]` - Botu kapatır.\n"
+        "🔹 `/liste` - Dosyaları listeler.\n\n"
+        f"⚠️ **Limit:** En fazla `{BOT_LIMIT}` bot çalışabilir."
     )
     bot.send_message(message.chat.id, admin_msg, reply_markup=markup, parse_mode="Markdown")
 
@@ -74,9 +75,8 @@ def bot_status(message):
 def handle_upload(message):
     if message.from_user.id != SAHIP_ID: return
     
-    # Limit Kontrolü
     if len(running_bots) >= BOT_LIMIT:
-        bot.send_message(message.chat.id, f"⚠️ **Limit Doldu!** En fazla {BOT_LIMIT} bot çalıştırabilirsin sevgilim. Önce birini durdur.")
+        bot.send_message(message.chat.id, f"⚠️ Limit doldu ({BOT_LIMIT}/5)!")
         return
 
     if message.document.file_name.endswith('.py'):
@@ -86,30 +86,15 @@ def handle_upload(message):
         
         with open(file_name, 'wb') as f: f.write(downloaded)
         
-        # Eğer aynı isimde varsa eskisini kapat
         if file_name in running_bots:
             try: os.kill(running_bots[file_name]['pid'], signal.SIGTERM)
             except: pass
             
         proc = subprocess.Popen(['python3', file_name])
         running_bots[file_name] = {"pid": proc.pid, "process": proc, "start_time": datetime.now()}
-        bot.send_message(message.chat.id, f"🚀 **{file_name}** sisteme dahil edildi! ({len(running_bots)}/{BOT_LIMIT})")
+        bot.send_message(message.chat.id, f"🚀 **{file_name}** aktif edildi!")
     else:
-        bot.reply_to(message, "⚠️ Sadece `.py` dosyası kabul ediyorum aşkım.")
-
-@bot.message_handler(commands=['durdur'])
-def stop_specific(message):
-    if message.from_user.id != SAHIP_ID: return
-    try:
-        name = message.text.split()[1]
-        if name in running_bots:
-            os.kill(running_bots[name]['pid'], signal.SIGTERM)
-            del running_bots[name]
-            bot.send_message(message.chat.id, f"🛑 `{name}` durduruldu.")
-        else:
-            bot.send_message(message.chat.id, "❓ Bot bulunamadı.")
-    except:
-        bot.send_message(message.chat.id, "⚠️ Kullanım: `/durdur dosya.py`")
+        bot.reply_to(message, "⚠️ Sadece .py dosyası lütfen.")
 
 @bot.message_handler(func=lambda m: m.text == "🛑 Tümünü Durdur")
 def stop_all(message):
@@ -118,23 +103,13 @@ def stop_all(message):
         try: os.kill(data['pid'], signal.SIGTERM)
         except: pass
     running_bots.clear()
-    bot.send_message(message.chat.id, "💥 **Tüm ordu terhis edildi.**")
+    bot.send_message(message.chat.id, "💥 Tüm ordu durduruldu.")
 
-# --- BAŞLAT ---
+# --- DİNAMİK BAŞLATMA ---
 if __name__ == "__main__":
     threading.Thread(target=run_render_server, daemon=True).start()
-    print("Master OS v14.0 Başlatıldı...")
-    bot.polling(none_stop=True)
-    if message.from_user.id != SAHIP_ID: return
-    for name, data in running_bots.items():
-        try: os.kill(data['pid'], signal.SIGTERM)
-        except: pass
-    running_bots.clear()
-    bot.send_message(message.chat.id, "💥 Sistem temizlendi.")
-
-# --- SİSTEMİ BAŞLAT ---
-if __name__ == "__main__":
-    # Health Check'i arka planda başlat sevgilim
-    threading.Thread(target=run_render_server, daemon=True).start()
-    print("Render Health Check Aktif (Port: 10000)")
-    bot.polling(none_stop=True)
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception:
+            time.sleep(5)
