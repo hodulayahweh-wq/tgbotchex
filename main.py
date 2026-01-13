@@ -1,102 +1,97 @@
 import os
-import asyncio
+import json
+import subprocess
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart
+from aiogram.utils import executor
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise Exception("BOT_TOKEN env bulunamadı")
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
-CHANNEL_USERNAME = "@nabisystemyeni"
-ADMINS = [7690743437]  # kendi admin id'ni koy
+BASE_DIR = "user_bots"
+os.makedirs(BASE_DIR, exist_ok=True)
 
-# 🔘 ANA MENÜ
-def main_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔍 Kontrol Et", callback_data="check")],
-        [InlineKeyboardButton(text="➕ Bot Yükle", callback_data="upload")],
-        [InlineKeyboardButton(text="📊 Panel", callback_data="panel")],
-        [InlineKeyboardButton(text="👥 Referans", callback_data="ref")],
-        [InlineKeyboardButton(text="🆘 Destek", callback_data="support")]
-    ])
+running = {}  # user_id: process
 
-# 🚀 START
-@dp.message(CommandStart())
+# ================== START ==================
+
+@dp.message_handler(commands=["start"])
 async def start(message: types.Message):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("➕ Bot Yükle (.py)", callback_data="upload"),
+        InlineKeyboardButton("🛑 Bot Durdur", callback_data="stop"),
+        InlineKeyboardButton("📊 Durum", callback_data="status"),
+    )
     await message.answer(
-        "✨ **Nabi System Bot Paneli**\n\n"
-        "Aşağıdan işlemini seç:",
-        reply_markup=main_menu(),
+        "🤖 *Render Bot Çalıştırıcı*\n\n"
+        "• .py dosyanı gönder\n"
+        "• Bot çalışsın\n\n"
+        "⚠️ Render restart olursa bot kapanır",
+        reply_markup=kb,
         parse_mode="Markdown"
     )
 
-# 🔍 KONTROL BUTONU (ZORUNLU DEĞİL)
-@dp.callback_query(lambda c: c.data == "check")
-async def check_channel(callback: types.CallbackQuery):
-    try:
-        member = await bot.get_chat_member(CHANNEL_USERNAME, callback.from_user.id)
-        if member.status in ["member", "administrator", "creator"]:
-            status = "✅ Kanala katıldın"
-        else:
-            status = "⚠️ Kanala katılmadın"
-    except:
-        status = "❌ Kanal kontrol edilemedi"
+# ================== UPLOAD ==================
 
-    await callback.message.edit_text(
-        f"🔎 **Durum Kontrolü**\n\n"
-        f"{status}\n\n"
-        "🚀 **Bot aktif edildi**\n"
-        "Tüm özellikler kullanıma açık.",
-        reply_markup=main_menu(),
-        parse_mode="Markdown"
+@dp.callback_query_handler(lambda c: c.data == "upload")
+async def upload(callback: types.CallbackQuery):
+    await callback.message.answer("📤 Çalıştırmak istediğin **.py** dosyasını gönder")
+
+@dp.message_handler(content_types=types.ContentType.DOCUMENT)
+async def handle_py(message: types.Message):
+    if not message.document.file_name.endswith(".py"):
+        await message.reply("❌ Sadece .py dosyası")
+        return
+
+    uid = str(message.from_user.id)
+    user_dir = os.path.join(BASE_DIR, uid)
+    os.makedirs(user_dir, exist_ok=True)
+
+    file_info = await bot.get_file(message.document.file_id)
+    file_path = os.path.join(user_dir, "bot.py")
+
+    await bot.download_file(file_info.file_path, file_path)
+
+    # Çalıştır
+    process = subprocess.Popen(
+        ["python", "bot.py"],
+        cwd=user_dir
     )
 
-# ➕ BOT YÜKLE
-@dp.callback_query(lambda c: c.data == "upload")
-async def upload_bot(callback: types.CallbackQuery):
-    await callback.answer()
-    await callback.message.answer(
-        "📤 **Bot Yükleme**\n\n"
-        "Yakında .py bot yükleme aktif olacak."
-    )
+    running[uid] = process
 
-# 📊 PANEL
-@dp.callback_query(lambda c: c.data == "panel")
-async def panel(callback: types.CallbackQuery):
-    await callback.answer()
-    await callback.message.answer(
-        "📊 **Kullanıcı Paneli**\n\n"
-        "• Aktif botlar\n"
-        "• Limitler\n"
-        "• Süre bilgisi"
-    )
+    await message.reply("✅ Bot çalıştırıldı")
 
-# 👥 REFERANS
-@dp.callback_query(lambda c: c.data == "ref")
-async def ref(callback: types.CallbackQuery):
-    await callback.answer()
-    await callback.message.answer(
-        "👥 **Referans Sistemi**\n\n"
-        "• 5 referans = ekstra hak\n"
-        "• Link yakında aktif"
-    )
+# ================== DURUM ==================
 
-# 🆘 DESTEK
-@dp.callback_query(lambda c: c.data == "support")
-async def support(callback: types.CallbackQuery):
-    await callback.answer()
-    await callback.message.answer(
-        "🆘 **Destek**\n\n"
-        "Sorununu yaz, admine iletilecek."
-    )
+@dp.callback_query_handler(lambda c: c.data == "status")
+async def status(callback: types.CallbackQuery):
+    uid = str(callback.from_user.id)
+    if uid in running and running[uid].poll() is None:
+        await callback.message.answer("🟢 Bot çalışıyor")
+    else:
+        await callback.message.answer("🔴 Bot kapalı")
 
-# ▶️ ÇALIŞTIR
-async def main():
-    await dp.start_polling(bot)
+# ================== STOP ==================
+
+@dp.callback_query_handler(lambda c: c.data == "stop")
+async def stop(callback: types.CallbackQuery):
+    uid = str(callback.from_user.id)
+    proc = running.get(uid)
+
+    if proc and proc.poll() is None:
+        proc.terminate()
+        del running[uid]
+        await callback.message.answer("🛑 Bot durduruldu")
+    else:
+        await callback.message.answer("❌ Çalışan bot yok")
+
+# ================== RUN ==================
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    executor.start_polling(dp, skip_updates=True)
