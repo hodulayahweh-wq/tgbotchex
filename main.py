@@ -1,94 +1,245 @@
-import telebot
 import os
+import sqlite3
+import asyncio
 import subprocess
-import threading
-from flask import Flask
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ChatMemberStatus
 
-TOKEN = os.environ.get("BOT_TOKEN")
-
-if not TOKEN:
+# ---------- CONFIG ----------
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
     raise Exception("BOT_TOKEN env bulunamadı")
 
-bot = telebot.TeleBot(TOKEN)
+ADMINS = [7690743437]
+REQUIRED_CHANNEL = "@nabisystemyeni"
 
-app = Flask(__name__)
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
-BASE_DIR = "projects"
-os.makedirs(BASE_DIR, exist_ok=True)
+# ---------- DATABASE ----------
+db = sqlite3.connect("database.db")
+cur = db.cursor()
 
-running = {}  # user_id: process
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    ref INTEGER DEFAULT 0,
+    referred_by INTEGER
+)
+""")
 
+cur.execute("""
+CREATE TABLE IF NOT EXISTS bots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner INTEGER,
+    token TEXT,
+    status TEXT
+)
+""")
+db.commit()
 
-@app.route("/")
-def home():
-    return "Bot çalışıyor"
+# ---------- BOT STORAGE ----------
+running_bots = {}  # bot_id : process
 
+# ---------- UTILS ----------
+async def is_subscribed(user_id):
+    try:
+        member = await bot.get_chat_member(REQUIRED_CHANNEL, user_id)
+        return member.status in (
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER
+        )
+    except:
+        return False
 
-@bot.message_handler(commands=['start'])
-def start(m):
-    bot.send_message(
-        m.chat.id,
-        "🤖 Bot Hosting Panel\n\n"
-        "/newproject - Bot yükle\n"
-        "/stop - Bot durdur\n"
-        "/status - Durum"
-    )
+def add_user(user_id, ref_by=None):
+    cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    if not cur.fetchone():
+        cur.execute(
+            "INSERT INTO users (user_id, referred_by) VALUES (?, ?)",
+            (user_id, ref_by)
+        )
+        if ref_by:
+            cur.execute("UPDATE users SET ref = ref + 1 WHERE user_id=?", (ref_by,))
+        db.commit()
 
+def get_ref(user_id):
+    cur.execute("SELECT ref FROM users WHERE user_id=?", (user_id,))
+    r = cur.fetchone()
+    return r[0] if r else 0
 
-@bot.message_handler(commands=['newproject'])
-def new_project(m):
-    bot.send_message(m.chat.id, "📤 bot.py dosyanı gönder")
+# ---------- START ----------
+@dp.message(CommandStart())
+async def start(msg: types.Message):
+    user_id = msg.from_user.id
+    args = msg.text.split()
+    ref_by = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
 
+    add_user(user_id, ref_by)
 
-@bot.message_handler(content_types=['document'])
-def handle_file(m):
-    if not m.document.file_name.endswith(".py"):
-        bot.send_message(m.chat.id, "❌ Sadece .py dosyası")
+    if not await is_subscribed(user_id):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📢 Kanala Katıl", url=f"https://t.me/{REQUIRED_CHANNEL[1:]}")],
+            [InlineKeyboardButton(text="✅ Kontrol Et", callback_data="check")]
+        ])
+        await msg.answer("❌ Botu kullanmak için kanala katıl.", reply_markup=kb)
         return
 
-    user_dir = f"{BASE_DIR}/{m.chat.id}"
-    os.makedirs(user_dir, exist_ok=True)
+    await main_panel(msg)
 
-    file_info = bot.get_file(m.document.file_id)
-    downloaded = bot.download_file(file_info.file_path)
+@dp.callback_query(lambda c: c.data == "check")
+async def check(call):
+    if await is_subscribed(call.from_user.id):
+        await main_panel(call.message)
+    else:
+        await call.answer("❌ Kanala katılmadın", show_alert=True)
 
-    path = f"{user_dir}/bot.py"
-    with open(path, "wb") as f:
-        f.write(downloaded)
+# ---------- MAIN PANEL ----------
+async def main_panel(msg):
+    ref = get_ref(msg.from_user.id)
+
+    if ref < 5:
+        link = f"https://t.me/{(await bot.me()).username}?start={msg.from_user.id}"
+        await msg.answer(
+            f"🔒 Kilitli\n👥 Referans: {ref}/5\n\n🔗 {link}"
+        )
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Botlarım", callback_data="mybots")],
+        [InlineKeyboardButton(text="➕ Bot Ekle", callback_data="addbot")],
+        [InlineKeyboardButton(text="📞 Destek", callback_data="support")]
+    ])
+
+    if msg.from_user.id in ADMINS:
+        kb.inline_keyboard.append(
+            [InlineKeyboardButton(text="⚙️ Admin Panel", callback_data="admin")]
+        )
+
+    await msg.answer("✅ Panel Açıldı", reply_markup=kb)
+
+# ---------- ADD BOT ----------
+@dp.callback_query(lambda c: c.data == "addbot")
+async def addbot(call):
+    await call.message.answer("🤖 Bot TOKEN gönder")
+
+@dp.message(lambda m: m.text and m.text.count(":") == 1)
+async def save_bot(msg):
+    token = msg.text.strip()
+    cur.execute(
+        "INSERT INTO bots (owner, token, status) VALUES (?, ?, ?)",
+        (msg.from_user.id, token, "stopped")
+    )
+    db.commit()
+    await msg.answer("✅ Bot eklendi")
+
+# ---------- MY BOTS ----------
+@dp.callback_query(lambda c: c.data == "mybots")
+async def mybots(call):
+    cur.execute("SELECT id, status FROM bots WHERE owner=?", (call.from_user.id,))
+    bots = cur.fetchall()
+
+    if not bots:
+        await call.message.answer("❌ Bot yok")
+        return
+
+    kb = InlineKeyboardMarkup()
+    for bot_id, status in bots:
+        kb.add(
+            InlineKeyboardButton(
+                text=f"🤖 Bot {bot_id} [{status}]",
+                callback_data=f"bot_{bot_id}"
+            )
+        )
+
+    await call.message.answer("🤖 Botların:", reply_markup=kb)
+
+# ---------- BOT CONTROL ----------
+@dp.callback_query(lambda c: c.data.startswith("bot_"))
+async def bot_control(call):
+    bot_id = int(call.data.split("_")[1])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="▶️ Başlat", callback_data=f"start_{bot_id}"),
+            InlineKeyboardButton(text="⏹ Durdur", callback_data=f"stop_{bot_id}")
+        ]
+    ])
+
+    await call.message.answer(f"⚙️ Bot {bot_id}", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data.startswith("start_"))
+async def start_bot(call):
+    bot_id = int(call.data.split("_")[1])
+
+    cur.execute("SELECT token FROM bots WHERE id=?", (bot_id,))
+    row = cur.fetchone()
+    if not row:
+        return
+
+    token = row[0]
 
     process = subprocess.Popen(
-        ["python", "bot.py"],
-        cwd=user_dir
+        ["python", "-c", f"""
+import telebot
+bot = telebot.TeleBot("{token}")
+@bot.message_handler(commands=['start'])
+def s(m): bot.send_message(m.chat.id, "🤖 Alt bot çalışıyor")
+bot.infinity_polling()
+"""]
     )
 
-    running[m.chat.id] = process
-    bot.send_message(m.chat.id, "✅ Bot çalıştırıldı")
+    running_bots[bot_id] = process
+    cur.execute("UPDATE bots SET status='running' WHERE id=?", (bot_id,))
+    db.commit()
 
+    await call.message.answer("▶️ Bot başlatıldı")
 
-@bot.message_handler(commands=['stop'])
-def stop_bot(m):
-    proc = running.get(m.chat.id)
+@dp.callback_query(lambda c: c.data.startswith("stop_"))
+async def stop_bot(call):
+    bot_id = int(call.data.split("_")[1])
+    proc = running_bots.get(bot_id)
+
     if proc:
         proc.terminate()
-        bot.send_message(m.chat.id, "🛑 Bot durduruldu")
-        del running[m.chat.id]
+        del running_bots[bot_id]
+        cur.execute("UPDATE bots SET status='stopped' WHERE id=?", (bot_id,))
+        db.commit()
+        await call.message.answer("⏹ Bot durduruldu")
     else:
-        bot.send_message(m.chat.id, "❌ Çalışan bot yok")
+        await call.message.answer("❌ Bot çalışmıyor")
 
+# ---------- SUPPORT ----------
+@dp.callback_query(lambda c: c.data == "support")
+async def support(call):
+    await call.message.answer("📩 Mesajını yaz")
 
-@bot.message_handler(commands=['status'])
-def status(m):
-    if m.chat.id in running:
-        bot.send_message(m.chat.id, "🟢 Bot çalışıyor")
-    else:
-        bot.send_message(m.chat.id, "🔴 Bot kapalı")
+@dp.message(lambda m: m.reply_to_message and "Mesajını yaz" in m.reply_to_message.text)
+async def forward_support(msg):
+    for admin in ADMINS:
+        await bot.send_message(
+            admin,
+            f"📩 Destek\n👤 {msg.from_user.id}\n\n{msg.text}"
+        )
+    await msg.answer("✅ İletildi")
 
+# ---------- ADMIN ----------
+@dp.callback_query(lambda c: c.data == "admin")
+async def admin(call):
+    cur.execute("SELECT COUNT(*) FROM users")
+    users = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM bots")
+    bots = cur.fetchone()[0]
+    await call.message.answer(
+        f"⚙️ Admin Panel\n\n👥 Kullanıcı: {users}\n🤖 Bot: {bots}"
+    )
 
-def run_bot():
-    bot.infinity_polling()
-
+# ---------- RUN ----------
+async def main():
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    asyncio.run(main())
