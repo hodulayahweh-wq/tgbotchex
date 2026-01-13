@@ -1,2 +1,1 @@
-flask
-pyTelegramBotAPI
+aiogram>=3.0,<4.0
