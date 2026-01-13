@@ -1,97 +1,72 @@
 import os
-import json
-import subprocess
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise Exception("BOT_TOKEN env bulunamadı")
+    raise Exception("BOT_TOKEN bulunamadı")
+
+ADMINS = [7690743437]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 
-BASE_DIR = "user_bots"
-os.makedirs(BASE_DIR, exist_ok=True)
+# ================= MENU =================
 
-running = {}  # user_id: process
-
-# ================== START ==================
+def main_menu():
+    return InlineKeyboardMarkup(row_width=1).add(
+        InlineKeyboardButton("➕ .py Yükle", callback_data="upload"),
+    )
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        InlineKeyboardButton("➕ Bot Yükle (.py)", callback_data="upload"),
-        InlineKeyboardButton("🛑 Bot Durdur", callback_data="stop"),
-        InlineKeyboardButton("📊 Durum", callback_data="status"),
-    )
     await message.answer(
-        "🤖 *Render Bot Çalıştırıcı*\n\n"
-        "• .py dosyanı gönder\n"
-        "• Bot çalışsın\n\n"
-        "⚠️ Render restart olursa bot kapanır",
-        reply_markup=kb,
-        parse_mode="Markdown"
+        "✅ Ana bot çalışıyor\n\n.py dosya yükleyebilirsin",
+        reply_markup=main_menu()
     )
 
-# ================== UPLOAD ==================
+# ================= DOSYA YÜKLE =================
 
 @dp.callback_query_handler(lambda c: c.data == "upload")
 async def upload(callback: types.CallbackQuery):
-    await callback.message.answer("📤 Çalıştırmak istediğin **.py** dosyasını gönder")
+    await callback.message.answer("📂 .py dosyasını gönder")
 
 @dp.message_handler(content_types=types.ContentType.DOCUMENT)
-async def handle_py(message: types.Message):
-    if not message.document.file_name.endswith(".py"):
-        await message.reply("❌ Sadece .py dosyası")
+async def load_py(message: types.Message):
+    if message.from_user.id not in ADMINS:
         return
 
-    uid = str(message.from_user.id)
-    user_dir = os.path.join(BASE_DIR, uid)
-    os.makedirs(user_dir, exist_ok=True)
+    doc = message.document
+    if not doc.file_name.endswith(".py"):
+        await message.reply("❌ Sadece .py dosya")
+        return
 
-    file_info = await bot.get_file(message.document.file_id)
-    file_path = os.path.join(user_dir, "bot.py")
+    file = await bot.download_file_by_id(doc.file_id)
 
-    await bot.download_file(file_info.file_path, file_path)
+    os.makedirs("plugins", exist_ok=True)
+    path = f"plugins/{doc.file_name}"
 
-    # Çalıştır
-    process = subprocess.Popen(
-        ["python", "bot.py"],
-        cwd=user_dir
-    )
+    with open(path, "wb") as f:
+        f.write(file.read())
 
-    running[uid] = process
+    namespace = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            code = f.read()
+            exec(code, namespace)
 
-    await message.reply("✅ Bot çalıştırıldı")
+        if "register" not in namespace:
+            await message.reply("❌ register(dp) yok")
+            return
 
-# ================== DURUM ==================
+        namespace["register"](dp)
+        await message.reply("✅ Bot yüklendi ve ÇALIŞIYOR")
 
-@dp.callback_query_handler(lambda c: c.data == "status")
-async def status(callback: types.CallbackQuery):
-    uid = str(callback.from_user.id)
-    if uid in running and running[uid].poll() is None:
-        await callback.message.answer("🟢 Bot çalışıyor")
-    else:
-        await callback.message.answer("🔴 Bot kapalı")
+    except Exception as e:
+        await message.reply(f"❌ Hata:\n{e}")
 
-# ================== STOP ==================
-
-@dp.callback_query_handler(lambda c: c.data == "stop")
-async def stop(callback: types.CallbackQuery):
-    uid = str(callback.from_user.id)
-    proc = running.get(uid)
-
-    if proc and proc.poll() is None:
-        proc.terminate()
-        del running[uid]
-        await callback.message.answer("🛑 Bot durduruldu")
-    else:
-        await callback.message.answer("❌ Çalışan bot yok")
-
-# ================== RUN ==================
+# ================= RUN =================
 
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates=True)True
