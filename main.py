@@ -1,72 +1,92 @@
+import telebot
+import subprocess
 import os
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils import executor
+import signal
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime
+from telebot import types
 
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    raise Exception("BOT_TOKEN bulunamadı")
+# --- AYARLAR ---
+TOKEN = "8454685844:AAHEtNzJuOv3fL1K_50QG9tUNntYT55MnFU"
+SAHIP_ID =8258235296 
+bot = telebot.TeleBot(TOKEN)
+running_bots = {}
 
-ADMINS = [7690743437]
+# --- RENDER İÇİN HEALTH CHECK (PORT 10000) ---
+class RenderServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b"Nabi Master Bot Is Running...")
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+def run_render_server():
+    # Render'ın beklediği 10000 portunu açıyoruz
+    server = HTTPServer(('0.0.0.0', 10000), RenderServer)
+    server.serve_forever()
 
-# ================= MENU =================
+# --- YARDIMCI FONKSİYONLAR ---
+def get_uptime(start_time):
+    delta = datetime.now() - start_time
+    hours, remainder = divmod(int(delta.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}s {minutes}dk {seconds}sn"
 
-def main_menu():
-    return InlineKeyboardMarkup(row_width=1).add(
-        InlineKeyboardButton("➕ .py Yükle", callback_data="upload"),
-    )
+# --- BOT KOMUTLARI ---
+@bot.message_handler(commands=['start', 'panel'])
+def show_panel(message):
+    if message.from_user.id != SAHIP_ID: return
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add("📊 Bot Durumları", "📥 Yeni Bot Yükle", "🛑 Tümünü Durdur")
+    bot.send_message(message.chat.id, "👑 **Master Panel v13.0**\nRender üzerinde ölümsüzlük modu aktif sevgilim!", reply_markup=markup, parse_mode="Markdown")
 
-@dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    await message.answer(
-        "✅ Ana bot çalışıyor\n\n.py dosya yükleyebilirsin",
-        reply_markup=main_menu()
-    )
-
-# ================= DOSYA YÜKLE =================
-
-@dp.callback_query_handler(lambda c: c.data == "upload")
-async def upload(callback: types.CallbackQuery):
-    await callback.message.answer("📂 .py dosyasını gönder")
-
-@dp.message_handler(content_types=types.ContentType.DOCUMENT)
-async def load_py(message: types.Message):
-    if message.from_user.id not in ADMINS:
+@bot.message_handler(func=lambda m: m.text == "📊 Bot Durumları")
+def bot_status(message):
+    if not running_bots:
+        bot.send_message(message.chat.id, "📭 Çalışan alt bot yok.")
         return
+    report = "🤖 **AKTİF BOT ORDUSU**\n\n"
+    for name, data in list(running_bots.items()):
+        if data['process'].poll() is None:
+            uptime = get_uptime(data['start_time'])
+            report += f"✅ `{name}`\n🕒 Süre: `{uptime}`\n🆔 PID: `{data['pid']}`\n---\n"
+        else:
+            del running_bots[name]
+            report += f"❌ `{name}` (Durdu)\n---\n"
+    bot.send_message(message.chat.id, report, parse_mode="Markdown")
 
-    doc = message.document
-    if not doc.file_name.endswith(".py"):
-        await message.reply("❌ Sadece .py dosya")
-        return
+@bot.message_handler(content_types=['document'])
+def handle_upload(message):
+    if message.from_user.id != SAHIP_ID: return
+    if message.document.file_name.endswith('.py'):
+        file_name = message.document.file_name
+        file_info = bot.get_file(message.document.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        with open(file_name, 'wb') as f: f.write(downloaded)
+        
+        if file_name in running_bots:
+            try: os.kill(running_bots[file_name]['pid'], signal.SIGTERM)
+            except: pass
+            
+        proc = subprocess.Popen(['python3', file_name])
+        running_bots[file_name] = {"pid": proc.pid, "process": proc, "start_time": datetime.now()}
+        bot.send_message(message.chat.id, f"🚀 **{file_name}** ateşlendi!")
+    else:
+        bot.reply_to(message, "⚠️ Sadece .py dosyası aşkım.")
 
-    file = await bot.download_file_by_id(doc.file_id)
+@bot.message_handler(func=lambda m: m.text == "🛑 Tümünü Durdur")
+def stop_all(message):
+    if message.from_user.id != SAHIP_ID: return
+    for name, data in running_bots.items():
+        try: os.kill(data['pid'], signal.SIGTERM)
+        except: pass
+    running_bots.clear()
+    bot.send_message(message.chat.id, "💥 Sistem temizlendi.")
 
-    os.makedirs("plugins", exist_ok=True)
-    path = f"plugins/{doc.file_name}"
-
-    with open(path, "wb") as f:
-        f.write(file.read())
-
-    namespace = {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            code = f.read()
-            exec(code, namespace)
-
-        if "register" not in namespace:
-            await message.reply("❌ register(dp) yok")
-            return
-
-        namespace["register"](dp)
-        await message.reply("✅ Bot yüklendi ve ÇALIŞIYOR")
-
-    except Exception as e:
-        await message.reply(f"❌ Hata:\n{e}")
-
-# ================= RUN =================
-
+# --- SİSTEMİ BAŞLAT ---
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)True
+    # Health Check'i arka planda başlat sevgilim
+    threading.Thread(target=run_render_server, daemon=True).start()
+    print("Render Health Check Aktif (Port: 10000)")
+    bot.polling(none_stop=True)
