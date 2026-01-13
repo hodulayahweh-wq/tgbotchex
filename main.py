@@ -9,7 +9,7 @@ from datetime import datetime
 from telebot import types
 
 # --- AYARLAR ---
-TOKEN = "8454685844:AAHBZVBARW5ve7CMDBTplj88POoQ17BZ6Fs"
+TOKEN = "8454685844:AAH7A83NxhUYwjILHC-wm4yec0jkMBi8j88"
 SAHIP_ID = 8258235296 
 bot = telebot.TeleBot(TOKEN)
 running_bots = {}
@@ -20,101 +20,88 @@ class RenderServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Nabi Master OS Aktif")
+        self.wfile.write(b"Nabi Master OS - Toplu Yukleme Aktif")
 
 def run_render_server():
     server = HTTPServer(('0.0.0.0', 10000), RenderServer)
     server.serve_forever()
 
-# --- YARDIMCI FONKSİYONLAR ---
-def get_uptime(start_time):
-    delta = datetime.now() - start_time
-    hours, remainder = divmod(int(delta.total_seconds()), 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours}s {minutes}dk {seconds}sn"
+# --- BAŞLANGIÇ ---
+@bot.message_handler(commands=['start'])
+def welcome(message):
+    welcome_msg = (
+        "👋 **Nabi Bot Servisine Hoş Geldiniz!**\n\n"
+        "Kendi botlarınızı çalıştırmak için `.py` dosyalarınızı gönderin.\n"
+        "🔹 **Toplu İşlem:** Birden fazla dosyayı aynı anda seçip gönderebilirsiniz!\n"
+        f"🔹 **Sistem Limiti:** Toplam `{BOT_LIMIT}` bot."
+    )
+    bot.send_message(message.chat.id, welcome_msg, parse_mode="Markdown")
 
-# --- TÜM KOMUTLAR VE PANEL ---
-@bot.message_handler(commands=['start', 'panel', 'yardim'])
-def show_panel(message):
+# --- GİZLİ ADMİN PANELİ ---
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
     if message.from_user.id != SAHIP_ID:
-        bot.reply_to(message, "❌ Erişim reddedildi.")
+        bot.reply_to(message, "❌ Yetkisiz erişim.")
         return
-    
-    # Şık Buton Paneli
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add("📊 Bot Durumları", "📜 Komut Listesi", "🛑 Tümünü Durdur")
-    
-    msg = (
-        "👑 **NABI MASTER KONTROL MERKEZİ**\n\n"
-        "Aşkım, tüm sistemler hazır. İşte kullanabileceğin admin güçleri:\n\n"
-        "📍 **Komutlar:**\n"
-        "• `/start` veya `/panel` - Bu menüyü açar.\n"
-        "• `/liste` - Çalışan botları metin olarak döker.\n"
-        "• `/durdur [dosya.py]` - İstediğin botu kapatır.\n"
-        "• `/sistem` - RAM/İşlemci durumu (Yakında).\n\n"
-        f"⚙️ **Durum:** `{len(running_bots)}/{BOT_LIMIT}` bot aktif.\n"
-        "📂 **Yeni Bot:** Dosyayı buraya sürükle bırak!"
-    )
-    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+    markup.add("📊 Bot Durumları", "🛑 Tümünü Durdur")
+    bot.send_message(message.chat.id, "👑 **Admin Paneli Açıldı**", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: m.text == "📜 Komut Listesi")
-def cmd_list(message):
-    if message.from_user.id != SAHIP_ID: return
-    text = (
-        "📜 **ADMİN KOMUT REHBERİ**\n\n"
-        "1️⃣ `/durdur bot_adi.py` -> Belirli botu öldürür.\n"
-        "2️⃣ `/panel` -> Ana menüyü getirir.\n"
-        "3️⃣ `.py` dosyası gönder -> Yeni bot başlatır.\n"
-        "4️⃣ `🛑 Tümünü Durdur` -> Komple sistemi temizler."
-    )
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "📊 Bot Durumları")
-@bot.message_handler(commands=['liste'])
-def bot_status(message):
-    if message.from_user.id != SAHIP_ID: return
-    if not running_bots:
-        bot.send_message(message.chat.id, "📭 **Şu an hiçbir alt bot çalışmıyor.**")
-        return
-    
-    report = f"🤖 **ORDU DURUMU ({len(running_bots)}/{BOT_LIMIT})**\n\n"
-    for name, data in list(running_bots.items()):
-        if data['process'].poll() is None:
-            uptime = get_uptime(data['start_time'])
-            report += f"✅ `{name}`\n🕒 `{uptime}` aktif\n🆔 PID: `{data['pid']}`\n---\n"
-        else:
-            del running_bots[name]
-    bot.send_message(message.chat.id, report, parse_mode="Markdown")
-
+# --- TOPLU BOT YÜKLEME MANTIĞI ---
 @bot.message_handler(content_types=['document'])
-def handle_upload(message):
-    if message.from_user.id != SAHIP_ID: return
+def handle_files(message):
+    # Toplam Limit Kontrolü
     if len(running_bots) >= BOT_LIMIT:
-        bot.send_message(message.chat.id, "⚠️ **Limit Dolu!** (Maks 5)")
+        bot.send_message(message.chat.id, f"⚠️ Üzgünüm, sistem kapasitesi dolu ({len(running_bots)}/{BOT_LIMIT}).")
         return
 
     if message.document.file_name.endswith('.py'):
-        file_name = message.document.file_name
-        file_info = bot.get_file(message.document.file_id)
-        downloaded = bot.download_file(file_info.file_path)
-        with open(file_name, 'wb') as f: f.write(downloaded)
+        # Kullanıcının ID'si ve dosya adını birleştirerek çakışmayı önle
+        original_name = message.document.file_name
+        safe_name = f"u{message.from_user.id}_{original_name}"
         
-        proc = subprocess.Popen(['python3', file_name])
-        running_bots[file_name] = {"pid": proc.pid, "process": proc, "start_time": datetime.now()}
-        bot.send_message(message.chat.id, f"🚀 **{file_name}** başarıyla ateşlendi!")
+        # Dosyayı İndir
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            downloaded = bot.download_file(file_info.file_path)
+            with open(safe_name, 'wb') as f:
+                f.write(downloaded)
+            
+            # Alt Botu Başlat
+            proc = subprocess.Popen(['python3', safe_name])
+            running_bots[safe_name] = {
+                "pid": proc.pid,
+                "process": proc,
+                "user": message.from_user.first_name,
+                "start_time": datetime.now()
+            }
+            
+            bot.send_message(message.chat.id, f"🚀 **{original_name}** başarıyla kuyruğa alındı ve başlatıldı!")
+            
+            # Yöneticiye (Sana) bilgi ver
+            if message.from_user.id != SAHIP_ID:
+                bot.send_message(SAHIP_ID, f"🔔 **Yeni Bot:** {message.from_user.first_name} -> `{original_name}`")
+                
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ `{original_name}` başlatılırken hata: {str(e)}")
     else:
-        bot.reply_to(message, "⚠️ Sadece .py dosyası gönder aşkım.")
+        bot.send_message(message.chat.id, f"⚠️ `{message.document.file_name}` Python dosyası değil.")
 
-@bot.message_handler(commands=['durdur'])
-def stop_one(message):
+# --- DURUM LİSTESİ ---
+@bot.message_handler(func=lambda m: m.text == "📊 Bot Durumları")
+def check_status(message):
     if message.from_user.id != SAHIP_ID: return
-    try:
-        name = message.text.split()[1]
-        os.kill(running_bots[name]['pid'], signal.SIGTERM)
-        del running_bots[name]
-        bot.send_message(message.chat.id, f"🛑 `{name}` kapatıldı.")
-    except:
-        bot.send_message(message.chat.id, "⚠️ Hata: `/durdur dosya.py` yazmalısın.")
+    if not running_bots:
+        bot.send_message(message.chat.id, "📭 Şu an aktif bot yok.")
+        return
+    
+    report = "🤖 **AKTİF ORDULAR**\n\n"
+    for name, data in list(running_bots.items()):
+        if data['process'].poll() is None:
+            report += f"👤 {data['user']} | 📄 `{name}` | 🆔 `{data['pid']}`\n"
+        else:
+            del running_bots[name]
+    bot.send_message(message.chat.id, report)
 
 @bot.message_handler(func=lambda m: m.text == "🛑 Tümünü Durdur")
 def stop_all(message):
@@ -123,10 +110,9 @@ def stop_all(message):
         try: os.kill(data['pid'], signal.SIGTERM)
         except: pass
     running_bots.clear()
-    bot.send_message(message.chat.id, "💥 **Sistem tamamen durduruldu.**")
+    bot.send_message(message.chat.id, "💥 Tüm botlar durduruldu.")
 
-# --- BAŞLATMA ---
 if __name__ == "__main__":
     threading.Thread(target=run_render_server, daemon=True).start()
-    print("Nabi Master v16.0 Hazır!")
-    bot.infinity_polling() # Infinity polling çakışmaları azaltır
+    bot.infinity_polling()
+umları
