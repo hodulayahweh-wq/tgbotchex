@@ -1,10 +1,23 @@
 import telebot
 import os
 import subprocess
+import threading
+from flask import Flask
 
-TOKEN = "8511366974:AAGP2gCMLAaKl4d31G0PblrWAwSy5gpxqwU"
+TOKEN = os.environ.get("8511366974:AAGP2gCMLAaKl4d31G0PblrWAwSy5gpxqwU")
 bot = telebot.TeleBot(TOKEN)
 
+# ===== WEB (UYANDIRMA İÇİN) =====
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot ayakta ✅"
+
+def run_web():
+    app.run(host="0.0.0.0", port=10000)
+
+# ===== BOT HOSTING PANEL =====
 BASE_DIR = "projects"
 os.makedirs(BASE_DIR, exist_ok=True)
 
@@ -65,4 +78,7 @@ def status(m):
     else:
         bot.send_message(m.chat.id, "🔴 Bot kapalı")
 
-bot.infinity_polling()
+# ===== BAŞLAT =====
+if __name__ == "__main__":
+    threading.Thread(target=run_web).start()
+    bot.infinity_polling()
