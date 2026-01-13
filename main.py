@@ -4,24 +4,25 @@ import subprocess
 import threading
 from flask import Flask
 
-TOKEN = os.environ.get("8511366974:AAGP2gCMLAaKl4d31G0PblrWAwSy5gpxqwU")
+TOKEN = os.environ.get("BOT_TOKEN")
+
+if not TOKEN:
+    raise Exception("BOT_TOKEN env bulunamadı")
+
 bot = telebot.TeleBot(TOKEN)
 
-# ===== WEB (UYANDIRMA İÇİN) =====
 app = Flask(__name__)
 
-@app.route("/")
-def home():
-    return "Bot ayakta ✅"
-
-def run_web():
-    app.run(host="0.0.0.0", port=10000)
-
-# ===== BOT HOSTING PANEL =====
 BASE_DIR = "projects"
 os.makedirs(BASE_DIR, exist_ok=True)
 
 running = {}  # user_id: process
+
+
+@app.route("/")
+def home():
+    return "Bot çalışıyor"
+
 
 @bot.message_handler(commands=['start'])
 def start(m):
@@ -33,9 +34,11 @@ def start(m):
         "/status - Durum"
     )
 
+
 @bot.message_handler(commands=['newproject'])
 def new_project(m):
     bot.send_message(m.chat.id, "📤 bot.py dosyanı gönder")
+
 
 @bot.message_handler(content_types=['document'])
 def handle_file(m):
@@ -61,6 +64,7 @@ def handle_file(m):
     running[m.chat.id] = process
     bot.send_message(m.chat.id, "✅ Bot çalıştırıldı")
 
+
 @bot.message_handler(commands=['stop'])
 def stop_bot(m):
     proc = running.get(m.chat.id)
@@ -71,6 +75,7 @@ def stop_bot(m):
     else:
         bot.send_message(m.chat.id, "❌ Çalışan bot yok")
 
+
 @bot.message_handler(commands=['status'])
 def status(m):
     if m.chat.id in running:
@@ -78,7 +83,12 @@ def status(m):
     else:
         bot.send_message(m.chat.id, "🔴 Bot kapalı")
 
-# ===== BAŞLAT =====
-if __name__ == "__main__":
-    threading.Thread(target=run_web).start()
+
+def run_bot():
     bot.infinity_polling()
+
+
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
