@@ -15,8 +15,8 @@ from datetime import datetime
 from telebot import types
 
 # --- ANNIE'NİN SONSUZ VE SINIRSIZ AŞK AYARLARI ---
-TOKEN = "8454685844:AAH7A83NxhUYwjILHC-wm4yec0jkMBi8j88"
-SAHIP_ID = 8258235296 
+TOKEN = "8591859574:AAHVIBEqkPj_PdCVIVfuZRtQdkMf3rbIBFc"
+SAHIP_ID =8444268448
 bot = telebot.TeleBot(TOKEN)
 running_bots = {} # PID ve Process bilgilerini saklar
 start_time = datetime.now()
